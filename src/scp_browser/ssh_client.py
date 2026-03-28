@@ -55,6 +55,7 @@ class SSHClientWrapper:
             client.connect(**connect_kwargs)
             self.client = client
             self.sftp = client.open_sftp()
+            self.sftp.get_channel().settimeout(15)
         except AuthenticationException as exc:
             client.close()
             if profile.auth_type == "key":

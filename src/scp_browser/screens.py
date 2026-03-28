@@ -525,7 +525,7 @@ class BrowserScreen(Screen[None]):
         self.set_preview_visibility()
         self.hide_inline_input()
         self.focus_active_pane()
-        await self.refresh_listing()
+        self.run_worker(self.refresh_listing(), exclusive=True)
 
     def set_status(self, message: str) -> None:
         self.query_one("#browser-status", Static).update(message)
