@@ -75,13 +75,14 @@ class SCPBrowserApp(App[None]):
 
     #browser-panes {
         layout: horizontal;
-        height: 1fr;
+        height: 2fr;
     }
 
     .browser-pane {
         width: 1fr;
         border: round $primary;
         padding: 0 1;
+        height: 1fr;
     }
 
     .pane-path {
@@ -89,17 +90,33 @@ class SCPBrowserApp(App[None]):
         padding: 0 1;
     }
 
-    #remote-list {
-        height: 1fr;
-    }
-
-    #local-list {
+    #remote-list, #local-list {
         height: 1fr;
     }
 
     #inline-input {
         display: none;
         margin: 1 0 0 0;
+    }
+
+    #preview-box {
+        height: 10;
+        border: round $accent;
+        padding: 0 1;
+        margin-top: 1;
+        min-height: 8;
+    }
+
+    #preview-scroll {
+        height: 1fr;
+    }
+
+    #preview-title {
+        text-style: bold;
+    }
+
+    #preview-content {
+        height: auto;
     }
 
     #progress {

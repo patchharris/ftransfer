@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Remote move operation
 - Local and remote pane filtering
 - Queued transfer progress with overall progress updates
+- Live local and remote preview panel for highlighted items
 
 ### Changed
 
@@ -20,6 +21,9 @@ All notable changes to this project will be documented in this file.
 - The connection form now uses toggle buttons for password vs SSH key auth
 - The connection form pane is scrollable in smaller terminals
 - SFTP operations now reconnect and retry once after a dropped channel
+- The preview panel starts closed by default and can be toggled on demand
+- The preview panel content is scrollable
+- Pane navigation now follows the currently focused pane more reliably
 
 ## [0.1.0] - 2026-03-28
 

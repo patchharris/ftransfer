@@ -7,6 +7,7 @@
 - Connection screen for creating, editing, deleting, and reusing saved profiles
 - Password and SSH key authentication with keyring-backed secret storage where available
 - Two-pane local and remote file browser with keyboard navigation
+- Live preview panel for the currently highlighted local or remote item
 - File metadata display: name, type, size, modified time
 - Download of files and directories
 - Upload of local files and directories into the current remote folder
@@ -123,6 +124,7 @@ Connection form notes:
 - `Tab`: switch between local and remote panes
 - `Enter`: open selected directory in the active pane
 - `Backspace` or `h`: go to parent directory in the active pane
+- `p`: toggle the preview panel
 - `/`: set or clear a filter for the active pane
 - `r`: refresh both panes
 - `.`: toggle hidden files
@@ -147,6 +149,13 @@ Delete confirmation:
 ### Local pane actions
 
 - `u`: upload selected local file or directory into the current remote folder
+
+Preview panel:
+
+- Updates automatically as you move through either pane
+- Shows metadata for files and directories
+- Shows a small text preview for UTF-8 text files
+- Marks binary files and truncated previews clearly
 
 ## Profiles and Secrets
 

@@ -261,6 +261,16 @@ class SSHClientWrapper:
                 return candidate_path
             counter += 1
 
+    def read_text_preview(self, remote_path: str, max_bytes: int = 8192) -> str:
+        try:
+            return str(self._with_sftp_retry(lambda sftp: self._read_text_preview(sftp, remote_path, max_bytes)))
+        except FileNotFoundError as exc:
+            raise SSHConnectionError("Remote file no longer exists.") from exc
+        except PermissionError as exc:
+            raise SSHConnectionError("Permission denied while previewing the remote file.") from exc
+        except OSError as exc:
+            raise SSHConnectionError(str(exc)) from exc
+
     def _delete_directory(self, remote_path: str) -> None:
         try:
             for entry in self.list_directory(remote_path):
@@ -306,6 +316,17 @@ class SSHClientWrapper:
             return name, ""
         stem, suffix = name.rsplit(".", 1)
         return stem, f".{suffix}"
+
+    @staticmethod
+    def _read_text_preview(sftp: paramiko.SFTPClient, remote_path: str, max_bytes: int) -> str:
+        with sftp.open(remote_path, "rb") as remote_file:
+            data = remote_file.read(max_bytes)
+        if b"\x00" in data:
+            return "[binary file]"
+        text = data.decode("utf-8", errors="replace")
+        if len(data) >= max_bytes:
+            text += "\n\n[preview truncated]"
+        return text or "[empty file]"
 
     def _attr_to_entry(self, parent: str, attr: SFTPAttributes) -> RemoteEntry:
         name = attr.filename

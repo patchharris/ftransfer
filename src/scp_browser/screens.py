@@ -450,6 +450,7 @@ class BrowserScreen(Screen[None]):
         Binding("enter", "open_selected", "Open"),
         Binding("backspace", "go_up", "Up"),
         Binding("h", "go_up", "Up"),
+        Binding("p", "toggle_preview", "Preview"),
         Binding("/", "begin_filter", "Filter"),
         Binding("tab", "switch_pane", "Pane"),
         Binding("space", "toggle_mark", "Mark"),
@@ -487,6 +488,7 @@ class BrowserScreen(Screen[None]):
         self.local_path = preferred_local_path if preferred_local_path.exists() else Path.home()
         self.local_entries: list[LocalEntry] = []
         self.active_pane = "remote"
+        self.preview_visible = False
         self.inline_mode: str | None = None
         self.pending_delete: RemoteEntry | LocalEntry | None = None
         self.pending_delete_scope: str | None = None
@@ -503,6 +505,10 @@ class BrowserScreen(Screen[None]):
                 with Vertical(classes="browser-pane"):
                     yield Label("", id="remote-path-label", classes="pane-path")
                     yield ListView(id="remote-list")
+            with Vertical(id="preview-box"):
+                yield Label("Preview", id="preview-title")
+                with VerticalScroll(id="preview-scroll"):
+                    yield Static("", id="preview-content")
             yield Input(placeholder="", id="inline-input")
             yield ProgressBar(total=100, show_eta=False, id="progress")
             yield Static("", id="browser-status")
@@ -513,6 +519,7 @@ class BrowserScreen(Screen[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.set_preview_visibility()
         self.hide_inline_input()
         self.focus_active_pane()
         await self.refresh_listing()
@@ -538,13 +545,24 @@ class BrowserScreen(Screen[None]):
         pane_id = "#remote-list" if self.active_pane == "remote" else "#local-list"
         self.query_one(pane_id, ListView).focus()
 
+    def sync_active_pane_from_focus(self) -> str:
+        if self.query_one("#remote-list", ListView).has_focus:
+            self.active_pane = "remote"
+        elif self.query_one("#local-list", ListView).has_focus:
+            self.active_pane = "local"
+        return self.active_pane
+
+    def set_preview_visibility(self) -> None:
+        preview_box = self.query_one("#preview-box", Vertical)
+        preview_box.styles.display = "block" if self.preview_visible else "none"
+
     def update_header(self) -> None:
         self.query_one("#local-path-label", Label).update(f"Local: {self.local_path}")
         self.query_one("#remote-path-label", Label).update(f"Remote: {self.current_path}")
         self.query_one("#browser-info", Label).update(
             f"Active: {self.active_pane} | Sort: {self.state.sort_mode} | Hidden: {'on' if self.state.show_hidden else 'off'} | "
             f"Local filter: {self.state.local_filter or '-'} | Remote filter: {self.state.remote_filter or '-'} | "
-            f"Marked: {len(self.state.multi_select)} | / filter | m mkdir | v move"
+            f"Marked: {len(self.state.multi_select)} | p preview | / filter | m mkdir | v move"
         )
 
     def render_remote_entries(self) -> None:
@@ -586,6 +604,7 @@ class BrowserScreen(Screen[None]):
         self.update_header()
         self.render_local_entries()
         self.render_remote_entries()
+        await self.update_preview()
         self.set_status(
             f"{len(self.local_entries)} local item(s) in {self.local_path} | {len(self.remote_entries)} remote item(s) in {self.current_path}"
         )
@@ -653,6 +672,16 @@ class BrowserScreen(Screen[None]):
             self.active_pane = "local"
             self.update_header()
             await self.action_open_selected()
+
+    async def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id == "remote-list":
+            self.active_pane = "remote"
+        elif event.list_view.id == "local-list":
+            self.active_pane = "local"
+        else:
+            return
+        self.update_header()
+        await self.update_preview()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "inline-input":
@@ -796,9 +825,72 @@ class BrowserScreen(Screen[None]):
             self.state.local_filter = filter_value
         await self.refresh_listing()
 
+    async def update_preview(self) -> None:
+        if not self.preview_visible:
+            return
+        title = self.query_one("#preview-title", Label)
+        content = self.query_one("#preview-content", Static)
+
+        if self.active_pane == "remote":
+            entry = self.get_selected_remote_entry()
+            if entry is None:
+                title.update("Preview")
+                content.update("No remote item selected.")
+                return
+            title.update(f"Preview | Remote | {entry.name}")
+            content.update(await self.build_remote_preview(entry))
+            return
+
+        entry = self.get_selected_local_entry()
+        if entry is None:
+            title.update("Preview")
+            content.update("No local item selected.")
+            return
+        title.update(f"Preview | Local | {entry.name}")
+        content.update(self.build_local_preview(entry))
+
+    async def build_remote_preview(self, entry: RemoteEntry) -> str:
+        header = [
+            f"Name: {entry.name}",
+            f"Path: {entry.path}",
+            f"Type: {'Directory' if entry.is_dir else 'File'}",
+            f"Size: {format_size(entry.size)}",
+            f"Modified: {entry.modified_time:%Y-%m-%d %H:%M:%S}",
+        ]
+        if entry.is_dir:
+            return "\n".join(header + ["", "[directory]"])
+        try:
+            preview = await asyncio.to_thread(self.ssh_client.read_text_preview, entry.path)
+        except SSHConnectionError as exc:
+            preview = f"[preview unavailable: {exc}]"
+        return "\n".join(header + ["", preview])
+
+    def build_local_preview(self, entry: LocalEntry) -> str:
+        header = [
+            f"Name: {entry.name}",
+            f"Path: {entry.path}",
+            f"Type: {'Directory' if entry.is_dir else 'File'}",
+            f"Size: {format_size(entry.size)}",
+            f"Modified: {entry.modified_time:%Y-%m-%d %H:%M:%S}",
+        ]
+        if entry.is_dir:
+            return "\n".join(header + ["", "[directory]"])
+        try:
+            data = entry.path.read_bytes()[:8192]
+            if b"\x00" in data:
+                preview = "[binary file]"
+            else:
+                preview = data.decode("utf-8", errors="replace") or "[empty file]"
+                if entry.size > 8192:
+                    preview += "\n\n[preview truncated]"
+        except OSError as exc:
+            preview = f"[preview unavailable: {exc}]"
+        return "\n".join(header + ["", preview])
+
     async def action_open_selected(self) -> None:
         if self.inline_mode is not None:
             return
+        self.sync_active_pane_from_focus()
         if self.active_pane == "remote":
             entry = self.get_selected_remote_entry()
             if entry is None:
@@ -823,6 +915,7 @@ class BrowserScreen(Screen[None]):
     async def action_go_up(self) -> None:
         if self.inline_mode is not None:
             return
+        self.sync_active_pane_from_focus()
         if self.active_pane == "remote":
             self.current_path = self.ssh_client.parent_path(self.current_path)
             self.state.multi_select.clear()
@@ -832,6 +925,7 @@ class BrowserScreen(Screen[None]):
         await self.refresh_listing()
 
     def action_toggle_mark(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.inline_mode is not None or self.active_pane != "remote":
             return
         entry = self.get_selected_remote_entry()
@@ -863,7 +957,15 @@ class BrowserScreen(Screen[None]):
         self.focus_active_pane()
         self.update_header()
 
+    async def action_toggle_preview(self) -> None:
+        self.preview_visible = not self.preview_visible
+        self.set_preview_visibility()
+        self.update_header()
+        if self.preview_visible:
+            await self.update_preview()
+
     def action_begin_rename(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.active_pane != "remote":
             self.set_status("Rename only applies to remote items.")
             return
@@ -877,6 +979,7 @@ class BrowserScreen(Screen[None]):
         self.set_status(f"Renaming '{entry.name}'. Press Enter to save or Esc to cancel.")
 
     def action_begin_mkdir(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.active_pane != "remote":
             self.set_status("Remote mkdir only applies to the remote pane.")
             return
@@ -888,6 +991,7 @@ class BrowserScreen(Screen[None]):
         self.set_status("Enter a new remote directory name and press Enter.")
 
     def action_begin_move(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.active_pane != "remote":
             self.set_status("Remote move only applies to the remote pane.")
             return
@@ -903,6 +1007,7 @@ class BrowserScreen(Screen[None]):
         self.set_status(f"Move '{entry.name}' to a new path or rename within the current folder.")
 
     def action_begin_filter(self) -> None:
+        self.sync_active_pane_from_focus()
         current_filter = self.state.remote_filter if self.active_pane == "remote" else self.state.local_filter
         self.pending_delete = None
         self.pending_delete_scope = None
@@ -914,6 +1019,7 @@ class BrowserScreen(Screen[None]):
     async def action_upload_selected_local(self) -> None:
         if self.inline_mode is not None:
             return
+        self.sync_active_pane_from_focus()
         if self.active_pane != "local":
             self.set_status("Switch to the local pane to choose a file or directory to upload.")
             return
@@ -937,6 +1043,7 @@ class BrowserScreen(Screen[None]):
         await self.refresh_listing()
 
     def action_request_delete(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.active_pane == "remote":
             entry = self.get_selected_remote_entry()
             self.pending_delete_scope = "remote"
@@ -970,6 +1077,7 @@ class BrowserScreen(Screen[None]):
         self.set_status("Action cancelled.")
 
     async def action_download(self) -> None:
+        self.sync_active_pane_from_focus()
         if self.active_pane != "remote":
             self.set_status("Download only applies to remote items.")
             return
