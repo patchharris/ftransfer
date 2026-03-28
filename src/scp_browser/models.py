@@ -14,6 +14,7 @@ class ConnectionProfile:
     download_dir: str = ""
     last_path: str = "."
     auth_type: str = "password"
+    key_path: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -24,6 +25,7 @@ class ConnectionProfile:
             "download_dir": self.download_dir,
             "last_path": self.last_path,
             "auth_type": self.auth_type,
+            "key_path": self.key_path,
         }
 
     @classmethod
@@ -36,6 +38,7 @@ class ConnectionProfile:
             download_dir=str(data.get("download_dir", "")).strip(),
             last_path=str(data.get("last_path", ".") or ".").strip(),
             auth_type=str(data.get("auth_type", "password") or "password").strip(),
+            key_path=str(data.get("key_path", "") or "").strip(),
         )
 
 
@@ -82,8 +85,19 @@ class PreparedDownload:
 
 
 @dataclass(slots=True)
+class TransferTask:
+    direction: str
+    source: str
+    destination: str
+    size: int
+    label: str
+
+
+@dataclass(slots=True)
 class AppState:
     selected_profile: str | None = None
     show_hidden: bool = False
     sort_mode: str = "name"
     multi_select: set[str] = field(default_factory=set)
+    local_filter: str = ""
+    remote_filter: str = ""

@@ -5,14 +5,15 @@
 ## Features
 
 - Connection screen for creating, editing, deleting, and reusing saved profiles
-- Password storage through the system keyring when available
+- Password and SSH key authentication with keyring-backed secret storage where available
 - Two-pane local and remote file browser with keyboard navigation
 - File metadata display: name, type, size, modified time
 - Download of files and directories
 - Upload of local files and directories into the current remote folder
-- Download progress bar and friendly status messages
-- Safe remote rename and delete operations
+- Queued upload and download progress with overall progress feedback
+- Safe remote rename, move, mkdir, and delete operations
 - Auto-rename handling for local and remote name conflicts
+- Local and remote pane filtering
 - Hidden-file toggle and sort cycling
 - Per-profile last visited remote path and default local download directory
 
@@ -111,11 +112,18 @@ From this repo folder on Windows, you can also use:
 - `F1`: open the in-app changelog/about screen
 - `q`: quit
 
+Connection form notes:
+
+- Use the `Password` / `SSH Key` toggle buttons to choose auth mode
+- `password` field is also used for an SSH key passphrase
+- `key path` is required when auth type is `key`
+
 ### Browser screen
 
 - `Tab`: switch between local and remote panes
 - `Enter`: open selected directory in the active pane
 - `Backspace` or `h`: go to parent directory in the active pane
+- `/`: set or clear a filter for the active pane
 - `r`: refresh both panes
 - `.`: toggle hidden files
 - `s`: cycle sort order
@@ -126,6 +134,8 @@ From this repo folder on Windows, you can also use:
 
 - `Space`: toggle multi-select
 - `d`: download selected items, or current item if none are marked
+- `m`: create a remote directory in the current remote folder
+- `v`: move the selected remote item to a new name or path
 - `n`: rename selected remote item
 - `x`: delete selected remote item
 
@@ -155,16 +165,14 @@ See [examples/profiles.example.json](/C:/Users/patch/Coding/ftransfer/examples/p
 
 - The app uses SFTP for directory browsing and downloads. It does not shell out to `scp`.
 - It targets Python 3.11+.
-- SSH key authentication is not implemented in the MVP, but the client and profile models are structured so it can be added later.
 - The browser is now two-pane: local on the left, remote on the right.
 - If a destination name already exists, uploads and downloads auto-rename rather than prompting.
+- Transfers now run through a file queue and show overall progress across multi-file operations.
 
 ## Future Enhancements
 
-- SSH key and agent authentication
 - Search within the current directory
 - Remote folder bookmarks
-- Better recursive directory progress aggregation
 - Local destination picker with bookmarks/history
 - Host key verification management UI
 

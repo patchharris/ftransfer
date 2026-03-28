@@ -41,7 +41,16 @@ class SCPBrowserApp(App[None]):
         margin-bottom: 1;
     }
 
+    .field-label {
+        margin-bottom: 1;
+    }
+
     Input {
+        margin-bottom: 1;
+    }
+
+    .auth-buttons {
+        height: auto;
         margin-bottom: 1;
     }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import posixpath
 import shutil
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -11,8 +12,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Markdown, ProgressBar, Static
 
-from .download_manager import DownloadManager
-from .models import AppState, ConnectionProfile, LocalEntry, PreparedDownload, RemoteEntry
+from .models import AppState, ConnectionProfile, LocalEntry, RemoteEntry, TransferTask
 from .profile_manager import ProfileManager
 from .ssh_client import SSHClientWrapper, SSHConnectionError
 
@@ -189,12 +189,17 @@ class ConnectionScreen(Screen[None]):
             with Vertical(id="profiles-pane"):
                 yield Label("Saved Profiles", classes="pane-title")
                 yield ListView(id="profile-list")
-            with Vertical(id="form-pane"):
+            with VerticalScroll(id="form-pane"):
                 yield Label("Connection", classes="pane-title")
                 yield Input(placeholder="Profile name", id="profile-name")
                 yield Input(placeholder="Host or IP", id="host")
                 yield Input(placeholder="Username", id="username")
-                yield Input(placeholder="Password", password=True, id="password")
+                yield Label("Authentication", classes="field-label")
+                with Horizontal(classes="auth-buttons"):
+                    yield Button("Password", id="auth-password", variant="primary")
+                    yield Button("SSH Key", id="auth-key")
+                yield Input(placeholder="Password or SSH key passphrase", password=True, id="password")
+                yield Input(placeholder="SSH key path (for key auth)", id="key-path")
                 yield Input(value="22", placeholder="Port", id="port")
                 yield Input(placeholder="Default local download directory", id="download-dir")
                 with Horizontal(classes="form-buttons"):
@@ -238,10 +243,12 @@ class ConnectionScreen(Screen[None]):
             "host": "",
             "username": "",
             "password": "",
+            "key-path": "",
             "port": "22",
             "download-dir": "",
         }.items():
             self.query_one(f"#{field_id}", Input).value = value
+        self.set_auth_type("password")
         self.set_status("Enter connection details to create a profile.")
 
     def load_profile(self, profile: ConnectionProfile) -> None:
@@ -251,12 +258,30 @@ class ConnectionScreen(Screen[None]):
         self.query_one("#host", Input).value = profile.host
         self.query_one("#username", Input).value = profile.username
         self.query_one("#password", Input).value = ""
+        self.query_one("#key-path", Input).value = profile.key_path
         self.query_one("#port", Input).value = str(profile.port)
         self.query_one("#download-dir", Input).value = profile.download_dir
-        self.set_status(f"Loaded profile '{profile.name}'. Leave password blank to use saved keyring secret.")
+        self.set_auth_type(profile.auth_type)
+        secret_name = "password" if profile.auth_type == "password" else "SSH key passphrase"
+        self.set_status(f"Loaded profile '{profile.name}'. Leave {secret_name} blank to use the saved keyring secret.")
 
     def set_status(self, message: str) -> None:
         self.query_one("#connection-status", Static).update(message)
+
+    def get_auth_type(self) -> str:
+        return "key" if self.query_one("#auth-key", Button).variant == "primary" else "password"
+
+    def set_auth_type(self, auth_type: str) -> None:
+        password_button = self.query_one("#auth-password", Button)
+        key_button = self.query_one("#auth-key", Button)
+        if auth_type == "key":
+            password_button.variant = "default"
+            key_button.variant = "primary"
+            self.query_one("#password", Input).placeholder = "SSH key passphrase (optional)"
+        else:
+            password_button.variant = "primary"
+            key_button.variant = "default"
+            self.query_one("#password", Input).placeholder = "Password"
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "profile-list":
@@ -275,7 +300,7 @@ class ConnectionScreen(Screen[None]):
         self.load_profile(self.profiles[index])
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id in {"password", "download-dir", "port", "username", "host", "profile-name"}:
+        if event.input.id in {"password", "download-dir", "port", "username", "host", "profile-name", "key-path"}:
             result = self.action_connect_profile()
             if asyncio.iscoroutine(result):
                 self.run_worker(result)
@@ -287,6 +312,12 @@ class ConnectionScreen(Screen[None]):
             "delete": self.action_delete_profile,
             "connect": self.action_connect_profile,
         }
+        if event.button.id == "auth-password":
+            self.set_auth_type("password")
+            return
+        if event.button.id == "auth-key":
+            self.set_auth_type("key")
+            return
         action = actions.get(event.button.id or "")
         if action is not None:
             result = action()
@@ -297,12 +328,18 @@ class ConnectionScreen(Screen[None]):
         name = self.query_one("#profile-name", Input).value.strip()
         host = self.query_one("#host", Input).value.strip()
         username = self.query_one("#username", Input).value.strip()
+        auth_type = self.get_auth_type()
         password = self.query_one("#password", Input).value
+        key_path = self.query_one("#key-path", Input).value.strip()
         download_dir = self.query_one("#download-dir", Input).value.strip()
         port_text = self.query_one("#port", Input).value.strip() or "22"
 
         if not name or not host or not username:
             raise ValueError("Profile name, host, and username are required.")
+        if auth_type not in {"password", "key"}:
+            raise ValueError("Auth type must be 'password' or 'key'.")
+        if auth_type == "key" and not key_path:
+            raise ValueError("SSH key path is required for key authentication.")
         try:
             port = int(port_text)
         except ValueError as exc:
@@ -315,6 +352,8 @@ class ConnectionScreen(Screen[None]):
             port=port,
             download_dir=download_dir,
             last_path=".",
+            auth_type=auth_type,
+            key_path=key_path,
         )
         existing = next((item for item in self.profiles if item.name == (self.editing_original_name or name)), None)
         if existing is not None:
@@ -335,16 +374,18 @@ class ConnectionScreen(Screen[None]):
         result = self.profile_manager.upsert_profile(
             profile=profile,
             password=password,
+            passphrase=password if profile.auth_type == "key" else "",
             original_name=self.editing_original_name,
         )
         self.state.selected_profile = result.profile.name
         self.editing_original_name = result.profile.name
         self.refresh_profiles()
-        if result.secret_result.ok:
+        if result.secret_result.ok and result.passphrase_result.ok:
             self.set_status(f"Saved profile '{result.profile.name}'.")
         else:
+            details = result.secret_result.message or result.passphrase_result.message
             self.set_status(
-                f"Saved profile '{result.profile.name}', but password was not stored in keyring: {result.secret_result.message}"
+                f"Saved profile '{result.profile.name}', but the secret was not stored in keyring: {details}"
             )
 
     def action_delete_profile(self) -> None:
@@ -364,18 +405,22 @@ class ConnectionScreen(Screen[None]):
             self.set_status(str(exc))
             return
 
-        if not password:
-            password = self.profile_manager.get_password(profile.name)
-        if not password:
-            self.set_status("Password is required. Enter one or save it to keyring first.")
-            return
+        passphrase = ""
+        if profile.auth_type == "key":
+            passphrase = password or self.profile_manager.get_passphrase(profile.name)
+        else:
+            password = password or self.profile_manager.get_password(profile.name)
+            if not password:
+                self.set_status("Password is required. Enter one or save it to keyring first.")
+                return
 
         self.set_status(f"Connecting to {profile.host}:{profile.port} ...")
         try:
-            await asyncio.to_thread(self.ssh_client.connect, profile, password)
+            await asyncio.to_thread(self.ssh_client.connect, profile, password, passphrase)
             self.profile_manager.upsert_profile(
                 profile,
                 password=password,
+                passphrase=passphrase,
                 original_name=self.editing_original_name,
             )
             self.state.selected_profile = profile.name
@@ -405,10 +450,13 @@ class BrowserScreen(Screen[None]):
         Binding("enter", "open_selected", "Open"),
         Binding("backspace", "go_up", "Up"),
         Binding("h", "go_up", "Up"),
+        Binding("/", "begin_filter", "Filter"),
         Binding("tab", "switch_pane", "Pane"),
         Binding("space", "toggle_mark", "Mark"),
         Binding("d", "download", "Download"),
         Binding("u", "upload_selected_local", "Upload"),
+        Binding("m", "begin_mkdir", "Mkdir"),
+        Binding("v", "begin_move", "Move"),
         Binding("n", "begin_rename", "Rename"),
         Binding("x", "request_delete", "Delete"),
         Binding("escape", "cancel_inline_action", "Cancel"),
@@ -433,15 +481,16 @@ class BrowserScreen(Screen[None]):
         self.ssh_client = ssh_client
         self.state = state
         self.profile = profile
-        self.download_manager = DownloadManager(ssh_client)
         self.current_path = profile.last_path or "."
         self.remote_entries: list[RemoteEntry] = []
-        self.local_path = Path.home()
+        preferred_local_path = Path(profile.download_dir).expanduser() if profile.download_dir else Path.home()
+        self.local_path = preferred_local_path if preferred_local_path.exists() else Path.home()
         self.local_entries: list[LocalEntry] = []
         self.active_pane = "remote"
         self.inline_mode: str | None = None
         self.pending_delete: RemoteEntry | LocalEntry | None = None
         self.pending_delete_scope: str | None = None
+        self.pending_move: RemoteEntry | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -468,17 +517,6 @@ class BrowserScreen(Screen[None]):
         self.focus_active_pane()
         await self.refresh_listing()
 
-    async def show_modal(self, screen: ModalScreen[object]) -> object:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[object] = loop.create_future()
-
-        def handle_result(result: object) -> None:
-            if not future.done():
-                future.set_result(result)
-
-        self.app.push_screen(screen, callback=handle_result)
-        return await future
-
     def set_status(self, message: str) -> None:
         self.query_one("#browser-status", Static).update(message)
 
@@ -504,7 +542,9 @@ class BrowserScreen(Screen[None]):
         self.query_one("#local-path-label", Label).update(f"Local: {self.local_path}")
         self.query_one("#remote-path-label", Label).update(f"Remote: {self.current_path}")
         self.query_one("#browser-info", Label).update(
-            f"Active: {self.active_pane} | Sort: {self.state.sort_mode} | Hidden: {'on' if self.state.show_hidden else 'off'} | Marked: {len(self.state.multi_select)} | Tab switch | u upload | d download"
+            f"Active: {self.active_pane} | Sort: {self.state.sort_mode} | Hidden: {'on' if self.state.show_hidden else 'off'} | "
+            f"Local filter: {self.state.local_filter or '-'} | Remote filter: {self.state.remote_filter or '-'} | "
+            f"Marked: {len(self.state.multi_select)} | / filter | m mkdir | v move"
         )
 
     def render_remote_entries(self) -> None:
@@ -538,6 +578,9 @@ class BrowserScreen(Screen[None]):
         self.profile.last_path = normalized
         self.profile_manager.upsert_profile(self.profile, original_name=self.profile.name)
         filtered = [entry for entry in entries if self.state.show_hidden or not entry.name.startswith(".")]
+        if self.state.remote_filter:
+            filter_text = self.state.remote_filter.lower()
+            filtered = [entry for entry in filtered if filter_text in entry.name.lower()]
         self.remote_entries = self.sort_entries(filtered)
         self.local_entries = self.load_local_entries(self.local_path)
         self.update_header()
@@ -562,6 +605,8 @@ class BrowserScreen(Screen[None]):
             entries = []
             for child in resolved.iterdir():
                 if not self.state.show_hidden and child.name.startswith("."):
+                    continue
+                if self.state.local_filter and self.state.local_filter.lower() not in child.name.lower():
                     continue
                 stats = child.stat()
                 entries.append(
@@ -616,6 +661,12 @@ class BrowserScreen(Screen[None]):
             await self.finish_rename(event.value.strip())
         elif self.inline_mode == "delete":
             await self.finish_delete_confirmation(event.value.strip())
+        elif self.inline_mode == "mkdir":
+            await self.finish_mkdir(event.value.strip())
+        elif self.inline_mode == "move":
+            await self.finish_move(event.value.strip())
+        elif self.inline_mode == "filter":
+            await self.finish_filter(event.value.strip())
 
     async def finish_rename(self, new_name: str) -> None:
         entry = self.get_selected_remote_entry()
@@ -686,6 +737,63 @@ class BrowserScreen(Screen[None]):
         if isinstance(entry, RemoteEntry):
             self.state.multi_select.discard(entry.path)
         self.set_status(f"Deleted '{entry.name}'.")
+        await self.refresh_listing()
+
+    async def finish_mkdir(self, name: str) -> None:
+        self.inline_mode = None
+        self.hide_inline_input()
+        if not name:
+            self.set_status("Create directory cancelled. Name cannot be empty.")
+            return
+        if "/" in name:
+            self.set_status("Create directory cancelled. Enter a directory name, not a path.")
+            return
+        target = posixpath.join(self.current_path, name)
+        try:
+            await asyncio.to_thread(self.ssh_client.mkdir, target)
+        except SSHConnectionError as exc:
+            self.set_status(str(exc))
+            return
+        self.set_status(f"Created remote directory '{name}'.")
+        await self.refresh_listing()
+
+    async def finish_move(self, target_value: str) -> None:
+        entry = self.pending_move
+        self.pending_move = None
+        self.inline_mode = None
+        self.hide_inline_input()
+        if entry is None:
+            self.set_status("No remote item selected for move.")
+            return
+        if not target_value:
+            self.set_status("Move cancelled.")
+            return
+
+        target_path = target_value
+        if not target_value.startswith("/"):
+            target_path = posixpath.join(self.current_path, target_value)
+        try:
+            if await asyncio.to_thread(self.ssh_client.path_exists, target_path) and await asyncio.to_thread(self.ssh_client.is_dir, target_path):
+                target_path = posixpath.join(target_path, entry.name)
+        except SSHConnectionError as exc:
+            self.set_status(str(exc))
+            return
+        try:
+            await asyncio.to_thread(self.ssh_client.rename_path, entry.path, target_path)
+        except SSHConnectionError as exc:
+            self.set_status(str(exc))
+            return
+        self.state.multi_select.discard(entry.path)
+        self.set_status(f"Moved '{entry.name}' to '{target_path}'.")
+        await self.refresh_listing()
+
+    async def finish_filter(self, filter_value: str) -> None:
+        self.inline_mode = None
+        self.hide_inline_input()
+        if self.active_pane == "remote":
+            self.state.remote_filter = filter_value
+        else:
+            self.state.local_filter = filter_value
         await self.refresh_listing()
 
     async def action_open_selected(self) -> None:
@@ -768,6 +876,41 @@ class BrowserScreen(Screen[None]):
         self.show_inline_input(entry.name, "Enter new name and press Enter")
         self.set_status(f"Renaming '{entry.name}'. Press Enter to save or Esc to cancel.")
 
+    def action_begin_mkdir(self) -> None:
+        if self.active_pane != "remote":
+            self.set_status("Remote mkdir only applies to the remote pane.")
+            return
+        self.pending_delete = None
+        self.pending_delete_scope = None
+        self.pending_move = None
+        self.inline_mode = "mkdir"
+        self.show_inline_input("", "Enter new remote directory name")
+        self.set_status("Enter a new remote directory name and press Enter.")
+
+    def action_begin_move(self) -> None:
+        if self.active_pane != "remote":
+            self.set_status("Remote move only applies to the remote pane.")
+            return
+        entry = self.get_selected_remote_entry()
+        if entry is None:
+            self.set_status("No remote item selected.")
+            return
+        self.pending_delete = None
+        self.pending_delete_scope = None
+        self.pending_move = entry
+        self.inline_mode = "move"
+        self.show_inline_input(entry.name, "Enter target remote path or new name")
+        self.set_status(f"Move '{entry.name}' to a new path or rename within the current folder.")
+
+    def action_begin_filter(self) -> None:
+        current_filter = self.state.remote_filter if self.active_pane == "remote" else self.state.local_filter
+        self.pending_delete = None
+        self.pending_delete_scope = None
+        self.pending_move = None
+        self.inline_mode = "filter"
+        self.show_inline_input(current_filter, "Enter filter text, or leave blank to clear")
+        self.set_status(f"Set the {self.active_pane} pane filter and press Enter.")
+
     async def action_upload_selected_local(self) -> None:
         if self.inline_mode is not None:
             return
@@ -778,16 +921,8 @@ class BrowserScreen(Screen[None]):
         if entry is None:
             self.set_status("No local item selected.")
             return
-        progress_bar = self.query_one("#progress", ProgressBar)
-        progress_bar.update(progress=0, total=100)
-
-        desired_remote = str(PurePosixPath(self.current_path) / entry.name)
         try:
-            remote_target = await asyncio.to_thread(
-                self.ssh_client.resolve_available_remote_path,
-                desired_remote,
-            )
-            await asyncio.to_thread(self.run_upload, entry.path, remote_target)
+            queue = await asyncio.to_thread(self.build_upload_queue, entry.path)
         except SSHConnectionError as exc:
             self.set_status(str(exc))
             return
@@ -795,9 +930,10 @@ class BrowserScreen(Screen[None]):
             self.set_status(f"Local filesystem error: {exc}")
             return
 
-        progress_bar.update(progress=100)
-        remote_label = PurePosixPath(remote_target).name
-        self.set_status(f"Uploaded '{entry.name}' as '{remote_label}'.")
+        if not queue:
+            self.set_status("Nothing to upload.")
+            return
+        await self.execute_transfer_queue(queue, "upload")
         await self.refresh_listing()
 
     def action_request_delete(self) -> None:
@@ -810,6 +946,7 @@ class BrowserScreen(Screen[None]):
         if entry is None:
             self.set_status("No item selected.")
             return
+        self.pending_move = None
         self.pending_delete = entry
         self.inline_mode = "delete"
         item_type = "directory" if entry.is_dir else "file"
@@ -827,6 +964,8 @@ class BrowserScreen(Screen[None]):
     def action_cancel_inline_action(self) -> None:
         self.inline_mode = None
         self.pending_delete = None
+        self.pending_delete_scope = None
+        self.pending_move = None
         self.hide_inline_input()
         self.set_status("Action cancelled.")
 
@@ -847,17 +986,8 @@ class BrowserScreen(Screen[None]):
         self.profile.download_dir = base_dir
         self.profile_manager.upsert_profile(self.profile, original_name=self.profile.name)
 
-        prepared = await self.prepare_downloads(targets, Path(base_dir).expanduser())
-        if not prepared:
-            self.set_status("Nothing to download.")
-            return
-
-        progress_bar = self.query_one("#progress", ProgressBar)
-        progress_bar.update(progress=0, total=100)
-        self.set_status(f"Downloading {len(prepared)} item(s)...")
-
         try:
-            await asyncio.to_thread(self.run_downloads, prepared)
+            queue = await asyncio.to_thread(self.build_download_queue, targets, Path(base_dir).expanduser())
         except SSHConnectionError as exc:
             self.set_status(str(exc))
             return
@@ -865,26 +995,13 @@ class BrowserScreen(Screen[None]):
             self.set_status(f"Local filesystem error: {exc}")
             return
 
+        if not queue:
+            self.set_status("Nothing to download.")
+            return
+        await self.execute_transfer_queue(queue, "download")
         self.state.multi_select.clear()
         self.render_remote_entries()
-        progress_bar.update(progress=100)
-        self.set_status(f"Downloaded {len(prepared)} item(s) to {base_dir}")
-
-    async def prepare_downloads(self, entries: list[RemoteEntry], base_dir: Path) -> list[PreparedDownload]:
-        prepared: list[PreparedDownload] = []
-        base_dir.mkdir(parents=True, exist_ok=True)
-
-        for entry in entries:
-            destination = self.resolve_destination(base_dir / entry.name)
-            prepared.append(
-                PreparedDownload(
-                    remote_path=entry.path,
-                    remote_name=entry.name,
-                    destination=destination,
-                    is_dir=entry.is_dir,
-                )
-            )
-        return prepared
+        self.set_status(f"Downloaded {len(queue)} file(s) to {base_dir}")
 
     def resolve_destination(self, destination: Path) -> Path:
         if not destination.exists():
@@ -900,33 +1017,140 @@ class BrowserScreen(Screen[None]):
                 return candidate
             counter += 1
 
-    def run_upload(self, local_path: Path, remote_target: str) -> None:
-        def progress(remote: str, done: int, total: int) -> None:
-            ratio = 0 if total <= 0 else int((done / total) * 100)
-            self.app.call_from_thread(self.update_upload_progress, remote, ratio)
-
-        self.ssh_client.upload_path(local_path, remote_target, progress_callback=progress)
-
     def delete_local_path(self, path: Path) -> None:
         if path.is_dir():
             shutil.rmtree(path)
             return
         path.unlink()
 
-    def run_downloads(self, prepared: list[PreparedDownload]) -> None:
-        def progress(remote: str, done: int, total: int) -> None:
-            ratio = 0 if total <= 0 else int((done / total) * 100)
-            self.app.call_from_thread(self.update_download_progress, remote, ratio)
+    def build_download_queue(self, entries: list[RemoteEntry], base_dir: Path) -> list[TransferTask]:
+        queue: list[TransferTask] = []
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-        self.download_manager.download_items(prepared, progress=progress)
+        for entry in entries:
+            root_destination = self.resolve_destination(base_dir / entry.name)
+            if entry.is_dir:
+                for child in self.ssh_client.walk_directory(entry.path):
+                    if child.is_dir:
+                        continue
+                    relative = child.path[len(entry.path):].lstrip("/")
+                    destination = root_destination / relative
+                    queue.append(
+                        TransferTask(
+                            direction="download",
+                            source=child.path,
+                            destination=str(destination),
+                            size=child.size,
+                            label=child.name,
+                        )
+                    )
+                continue
+            queue.append(
+                TransferTask(
+                    direction="download",
+                    source=entry.path,
+                    destination=str(root_destination),
+                    size=entry.size,
+                    label=entry.name,
+                )
+            )
+        return queue
 
-    def update_download_progress(self, remote: str, percent: int) -> None:
-        self.query_one("#progress", ProgressBar).update(progress=percent)
-        self.set_status(f"Downloading {remote} ... {percent}%")
+    def build_upload_queue(self, local_path: Path) -> list[TransferTask]:
+        desired_remote = str(PurePosixPath(self.current_path) / local_path.name)
+        remote_target = self.ssh_client.resolve_available_remote_path(desired_remote)
+        queue: list[TransferTask] = []
 
-    def update_upload_progress(self, remote: str, percent: int) -> None:
-        self.query_one("#progress", ProgressBar).update(progress=percent)
-        self.set_status(f"Uploading to {remote} ... {percent}%")
+        if local_path.is_dir():
+            for child in local_path.rglob("*"):
+                if child.is_dir():
+                    continue
+                relative = child.relative_to(local_path).as_posix()
+                destination = posixpath.join(remote_target, relative)
+                queue.append(
+                    TransferTask(
+                        direction="upload",
+                        source=str(child),
+                        destination=destination,
+                        size=child.stat().st_size,
+                        label=child.name,
+                    )
+                )
+            return queue
+
+        queue.append(
+            TransferTask(
+                direction="upload",
+                source=str(local_path),
+                destination=remote_target,
+                size=local_path.stat().st_size,
+                label=local_path.name,
+            )
+        )
+        return queue
+
+    async def execute_transfer_queue(self, queue: list[TransferTask], direction: str) -> None:
+        total_bytes = sum(max(task.size, 1) for task in queue)
+        progress_bar = self.query_one("#progress", ProgressBar)
+        progress_bar.update(progress=0, total=100)
+        noun = "upload" if direction == "upload" else "download"
+        self.set_status(f"Starting {noun} queue with {len(queue)} file(s)...")
+
+        try:
+            await asyncio.to_thread(self.run_transfer_queue, queue, total_bytes)
+        except SSHConnectionError as exc:
+            self.set_status(str(exc))
+            return
+        except OSError as exc:
+            self.set_status(f"Filesystem error: {exc}")
+            return
+
+        progress_bar.update(progress=100)
+        self.set_status(f"Completed {noun} queue with {len(queue)} file(s).")
+
+    def run_transfer_queue(self, queue: list[TransferTask], total_bytes: int) -> None:
+        completed_bytes = 0
+
+        for index, task in enumerate(queue, start=1):
+            def progress(done: int, total: int, *, current_task: TransferTask = task, current_index: int = index) -> None:
+                total_for_file = max(total, current_task.size, 1)
+                overall_done = completed_bytes + min(done, total_for_file)
+                percent = int((overall_done / max(total_bytes, 1)) * 100)
+                self.app.call_from_thread(
+                    self.update_transfer_progress,
+                    current_task,
+                    current_index,
+                    len(queue),
+                    percent,
+                    int(done),
+                    int(total_for_file),
+                )
+
+            if task.direction == "download":
+                destination = Path(task.destination)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                self.ssh_client.download_file(task.source, str(destination), progress_callback=progress)
+            else:
+                self.ssh_client.ensure_parent_dir(task.destination)
+                self.ssh_client.upload_file(task.source, task.destination, progress_callback=progress)
+
+            completed_bytes += max(task.size, 1)
+
+    def update_transfer_progress(
+        self,
+        task: TransferTask,
+        index: int,
+        count: int,
+        overall_percent: int,
+        current_done: int,
+        current_total: int,
+    ) -> None:
+        direction_label = "Uploading" if task.direction == "upload" else "Downloading"
+        current_percent = int((current_done / max(current_total, 1)) * 100)
+        self.query_one("#progress", ProgressBar).update(progress=overall_percent)
+        self.set_status(
+            f"{direction_label} {task.label} ({index}/{count}) | current {current_percent}% | overall {overall_percent}%"
+        )
 
     def action_disconnect(self) -> None:
         self.ssh_client.close()

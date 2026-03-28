@@ -25,28 +25,40 @@ class SSHClientWrapper:
         self.client: paramiko.SSHClient | None = None
         self.sftp: paramiko.SFTPClient | None = None
 
-    def connect(self, profile: ConnectionProfile, password: str) -> None:
+    def connect(self, profile: ConnectionProfile, password: str = "", passphrase: str = "") -> None:
         self.close()
         self.profile = profile
-        self.password = password
+        self.password = password if profile.auth_type == "password" else passphrase
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            client.connect(
-                hostname=profile.host,
-                port=profile.port,
-                username=profile.username,
-                password=password,
-                look_for_keys=False,
-                allow_agent=False,
-                timeout=10,
-                banner_timeout=10,
-                auth_timeout=10,
-            )
+            connect_kwargs: dict[str, object] = {
+                "hostname": profile.host,
+                "port": profile.port,
+                "username": profile.username,
+                "timeout": 10,
+                "banner_timeout": 10,
+                "auth_timeout": 10,
+            }
+            if profile.auth_type == "key":
+                connect_kwargs["look_for_keys"] = False
+                connect_kwargs["allow_agent"] = True
+                if profile.key_path:
+                    connect_kwargs["key_filename"] = profile.key_path
+                if passphrase:
+                    connect_kwargs["passphrase"] = passphrase
+            else:
+                connect_kwargs["password"] = password
+                connect_kwargs["look_for_keys"] = False
+                connect_kwargs["allow_agent"] = False
+
+            client.connect(**connect_kwargs)
             self.client = client
             self.sftp = client.open_sftp()
         except AuthenticationException as exc:
             client.close()
+            if profile.auth_type == "key":
+                raise SSHConnectionError("Authentication failed. Check the SSH key, passphrase, or agent.") from exc
             raise SSHConnectionError("Authentication failed. Check username or password.") from exc
         except (socket.gaierror, TimeoutError, OSError) as exc:
             client.close()
@@ -61,7 +73,10 @@ class SSHClientWrapper:
         transport = self.client.get_transport()
         if transport is not None and transport.is_active():
             return
-        self.connect(self.profile, self.password)
+        if self.profile.auth_type == "key":
+            self.connect(self.profile, passphrase=self.password)
+        else:
+            self.connect(self.profile, password=self.password)
 
     def close(self) -> None:
         if self.sftp is not None:
@@ -180,6 +195,16 @@ class SSHClientWrapper:
             raise SSHConnectionError("Remote file no longer exists.") from exc
         except PermissionError as exc:
             raise SSHConnectionError("Permission denied while renaming the remote item.") from exc
+        except OSError as exc:
+            raise SSHConnectionError(str(exc)) from exc
+
+    def mkdir(self, remote_path: str) -> None:
+        self.ensure_connected()
+        assert self.sftp is not None
+        try:
+            self.sftp.mkdir(remote_path)
+        except PermissionError as exc:
+            raise SSHConnectionError("Permission denied while creating the remote directory.") from exc
         except OSError as exc:
             raise SSHConnectionError(str(exc)) from exc
 

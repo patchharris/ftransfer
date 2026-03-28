@@ -11,6 +11,7 @@ from .secrets import SecretResult, SecretStore
 class SaveProfileResult:
     profile: ConnectionProfile
     secret_result: SecretResult
+    passphrase_result: SecretResult
 
 
 class ProfileManager:
@@ -38,6 +39,7 @@ class ProfileManager:
         self,
         profile: ConnectionProfile,
         password: str = "",
+        passphrase: str = "",
         original_name: str | None = None,
     ) -> SaveProfileResult:
         profiles = self.load_profiles()
@@ -57,16 +59,24 @@ class ProfileManager:
 
         if original_name and original_name != profile.name:
             self.secret_store.delete_password(original_name)
+            self.secret_store.delete_secret(original_name, "passphrase")
 
         secret_result = SecretResult(ok=True)
+        passphrase_result = SecretResult(ok=True)
         if password:
             secret_result = self.secret_store.set_password(profile.name, password)
-        return SaveProfileResult(profile=profile, secret_result=secret_result)
+        if passphrase:
+            passphrase_result = self.secret_store.set_secret(profile.name, passphrase, "passphrase")
+        return SaveProfileResult(profile=profile, secret_result=secret_result, passphrase_result=passphrase_result)
 
     def delete_profile(self, profile_name: str) -> SecretResult:
         profiles = [profile for profile in self.load_profiles() if profile.name != profile_name]
         self.save_profiles(profiles)
+        self.secret_store.delete_secret(profile_name, "passphrase")
         return self.secret_store.delete_password(profile_name)
 
     def get_password(self, profile_name: str) -> str:
         return self.secret_store.get_password(profile_name)
+
+    def get_passphrase(self, profile_name: str) -> str:
+        return self.secret_store.get_secret(profile_name, "passphrase")

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-28
+
+### Added
+
+- SSH key authentication with profile-level key path support
+- Remote directory creation
+- Remote move operation
+- Local and remote pane filtering
+- Queued transfer progress with overall progress updates
+
+### Changed
+
+- Connection profiles can now store an auth type and SSH key path
+- Transfer progress now reflects the full queue instead of a single file at a time
+- The local pane starts in the profile's saved local download directory when available
+
 ## [0.1.0] - 2026-03-28
 
 ### Added

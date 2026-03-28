@@ -21,27 +21,40 @@ class SecretStore:
     def __init__(self, service_name: str = SERVICE_NAME) -> None:
         self.service_name = service_name
 
-    def get_password(self, profile_name: str) -> str:
+    def _account_name(self, profile_name: str, secret_type: str) -> str:
+        return f"{profile_name}:{secret_type}"
+
+    def get_secret(self, profile_name: str, secret_type: str = "password") -> str:
         try:
-            return keyring.get_password(self.service_name, profile_name) or ""
+            return keyring.get_password(self.service_name, self._account_name(profile_name, secret_type)) or ""
         except (KeyringError, NoKeyringError):
             return ""
 
-    def set_password(self, profile_name: str, password: str) -> SecretResult:
-        if not password:
+    def set_secret(self, profile_name: str, secret: str, secret_type: str = "password") -> SecretResult:
+        if not secret:
             return SecretResult(ok=True)
         try:
-            keyring.set_password(self.service_name, profile_name, password)
+            keyring.set_password(self.service_name, self._account_name(profile_name, secret_type), secret)
             return SecretResult(ok=True)
         except (KeyringError, NoKeyringError) as exc:
             return SecretResult(ok=False, message=str(exc))
 
-    def delete_password(self, profile_name: str) -> SecretResult:
+    def delete_secret(self, profile_name: str, secret_type: str = "password") -> SecretResult:
         try:
-            existing = keyring.get_password(self.service_name, profile_name)
+            account_name = self._account_name(profile_name, secret_type)
+            existing = keyring.get_password(self.service_name, account_name)
             if existing is None:
                 return SecretResult(ok=True)
-            keyring.delete_password(self.service_name, profile_name)
+            keyring.delete_password(self.service_name, account_name)
             return SecretResult(ok=True)
         except (KeyringError, NoKeyringError) as exc:
             return SecretResult(ok=False, message=str(exc))
+
+    def get_password(self, profile_name: str) -> str:
+        return self.get_secret(profile_name, "password")
+
+    def set_password(self, profile_name: str, password: str) -> SecretResult:
+        return self.set_secret(profile_name, password, "password")
+
+    def delete_password(self, profile_name: str) -> SecretResult:
+        return self.delete_secret(profile_name, "password")
