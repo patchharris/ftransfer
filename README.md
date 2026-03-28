@@ -1,13 +1,17 @@
-# SCP Browser TUI
+<h1 align="center">SCP Browser TUI</h1>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green)](#features)
-[![UI](https://img.shields.io/badge/TUI-Textual-5c4ee5)](https://textual.textualize.io/)
-[![SSH](https://img.shields.io/badge/SSH-Paramiko-2ea44f)](https://www.paramiko.org/)
-[![Install with pipx](https://img.shields.io/badge/install-pipx-f69220)](#one-command-install)
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="https://www.python.org/"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue"></a>
+  <a href="#features"><img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green"></a>
+  <a href="https://textual.textualize.io/"><img alt="UI" src="https://img.shields.io/badge/TUI-Textual-5c4ee5"></a>
+  <a href="https://www.paramiko.org/"><img alt="SSH" src="https://img.shields.io/badge/SSH-Paramiko-2ea44f"></a>
+  <a href="#one-command-install"><img alt="Install with pipx" src="https://img.shields.io/badge/install-pipx-f69220"></a>
+</p>
 
-`scp-browser-tui` is a keyboard-driven terminal file browser for downloading files from remote Linux systems over SSH/SFTP. It uses Textual for the interface, Paramiko for SSH/SFTP operations, and keyring for password storage when available.
+<p align="center">
+  <code>scp-browser-tui</code> is a keyboard-driven terminal file browser for downloading files from remote Linux systems over SSH/SFTP. It uses Textual for the interface, Paramiko for SSH/SFTP operations, and keyring for password storage when available.
+</p>
 
 ## Features
 
@@ -109,6 +113,13 @@ $env:PYTHONPATH="src"
 python -m scp_browser
 ```
 
+Linux / macOS:
+
+```bash
+export PYTHONPATH=src
+python -m scp_browser
+```
+
 After `pip install -e .`, you can launch it directly with:
 
 ```bash
@@ -119,6 +130,17 @@ From this repo folder on Windows, you can also use:
 
 ```powershell
 .\ftransfer.ps1
+```
+
+Linux example:
+
+```bash
+git clone https://github.com/patchharris/ftransfer.git
+cd ftransfer
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+ftransfer
 ```
 
 ## Keyboard Shortcuts
