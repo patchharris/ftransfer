@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 - Connection profiles can now store an auth type and SSH key path
 - Transfer progress now reflects the full queue instead of a single file at a time
 - The local pane starts in the profile's saved local download directory when available
+- The connection form now uses toggle buttons for password vs SSH key auth
+- The connection form pane is scrollable in smaller terminals
+- SFTP operations now reconnect and retry once after a dropped channel
 
 ## [0.1.0] - 2026-03-28
 

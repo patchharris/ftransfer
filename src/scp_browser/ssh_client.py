@@ -87,18 +87,14 @@ class SSHClientWrapper:
             self.client = None
 
     def normalize(self, remote_path: str) -> str:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            return self.sftp.normalize(remote_path)
+            return self._with_sftp_retry(lambda sftp: sftp.normalize(remote_path))
         except OSError as exc:
             raise SSHConnectionError(str(exc)) from exc
 
     def list_directory(self, remote_path: str) -> list[RemoteEntry]:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            attrs = self.sftp.listdir_attr(remote_path)
+            attrs = self._with_sftp_retry(lambda sftp: sftp.listdir_attr(remote_path))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Remote path does not exist.") from exc
         except PermissionError as exc:
@@ -112,10 +108,8 @@ class SSHClientWrapper:
         return entries
 
     def is_dir(self, remote_path: str) -> bool:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            mode = self.sftp.stat(remote_path).st_mode
+            mode = self._with_sftp_retry(lambda sftp: sftp.stat(remote_path).st_mode)
             return stat.S_ISDIR(mode)
         except OSError as exc:
             raise SSHConnectionError(str(exc)) from exc
@@ -138,10 +132,8 @@ class SSHClientWrapper:
         local_path: str,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            self.sftp.get(remote_path, local_path, callback=progress_callback)
+            self._with_sftp_retry(lambda sftp: sftp.get(remote_path, local_path, callback=progress_callback))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Remote file no longer exists.") from exc
         except PermissionError as exc:
@@ -155,10 +147,8 @@ class SSHClientWrapper:
         remote_path: str,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            self.sftp.put(local_path, remote_path, callback=progress_callback)
+            self._with_sftp_retry(lambda sftp: sftp.put(local_path, remote_path, callback=progress_callback))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Local file no longer exists.") from exc
         except PermissionError as exc:
@@ -187,10 +177,8 @@ class SSHClientWrapper:
         )
 
     def rename_path(self, remote_path: str, new_path: str) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            self.sftp.rename(remote_path, new_path)
+            self._with_sftp_retry(lambda sftp: sftp.rename(remote_path, new_path))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Remote file no longer exists.") from exc
         except PermissionError as exc:
@@ -199,10 +187,8 @@ class SSHClientWrapper:
             raise SSHConnectionError(str(exc)) from exc
 
     def mkdir(self, remote_path: str) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            self.sftp.mkdir(remote_path)
+            self._with_sftp_retry(lambda sftp: sftp.mkdir(remote_path))
         except PermissionError as exc:
             raise SSHConnectionError("Permission denied while creating the remote directory.") from exc
         except OSError as exc:
@@ -213,9 +199,8 @@ class SSHClientWrapper:
         if self.is_dir(remote_path):
             self._delete_directory(remote_path)
             return
-        assert self.sftp is not None
         try:
-            self.sftp.remove(remote_path)
+            self._with_sftp_retry(lambda sftp: sftp.remove(remote_path))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Remote file no longer exists.") from exc
         except PermissionError as exc:
@@ -231,10 +216,8 @@ class SSHClientWrapper:
         return parent or "/"
 
     def path_exists(self, remote_path: str) -> bool:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
-            self.sftp.stat(remote_path)
+            self._with_sftp_retry(lambda sftp: sftp.stat(remote_path))
             return True
         except FileNotFoundError:
             return False
@@ -246,8 +229,6 @@ class SSHClientWrapper:
         self.ensure_dir(parent)
 
     def ensure_dir(self, remote_path: str) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         if remote_path in ("", "/"):
             return
         parts = [part for part in remote_path.split("/") if part]
@@ -255,12 +236,12 @@ class SSHClientWrapper:
         for part in parts:
             current = posixpath.join(current, part)
             try:
-                mode = self.sftp.stat(current).st_mode
+                mode = self._with_sftp_retry(lambda sftp, path=current: sftp.stat(path).st_mode)
                 if not stat.S_ISDIR(mode):
                     raise SSHConnectionError(f"Remote path exists and is not a directory: {current}")
             except FileNotFoundError:
                 try:
-                    self.sftp.mkdir(current)
+                    self._with_sftp_retry(lambda sftp, path=current: sftp.mkdir(path))
                 except OSError as exc:
                     raise SSHConnectionError(str(exc)) from exc
             except OSError as exc:
@@ -281,15 +262,13 @@ class SSHClientWrapper:
             counter += 1
 
     def _delete_directory(self, remote_path: str) -> None:
-        self.ensure_connected()
-        assert self.sftp is not None
         try:
             for entry in self.list_directory(remote_path):
                 if entry.is_dir:
                     self._delete_directory(entry.path)
                 else:
-                    self.sftp.remove(entry.path)
-            self.sftp.rmdir(remote_path)
+                    self._with_sftp_retry(lambda sftp, path=entry.path: sftp.remove(path))
+            self._with_sftp_retry(lambda sftp: sftp.rmdir(remote_path))
         except FileNotFoundError as exc:
             raise SSHConnectionError("Remote directory no longer exists.") from exc
         except PermissionError as exc:
@@ -341,3 +320,21 @@ class SSHClientWrapper:
             modified_time=modified,
             mode=attr.st_mode,
         )
+
+    def _with_sftp_retry(self, operation: Callable[[paramiko.SFTPClient], object]) -> object:
+        self.ensure_connected()
+        assert self.sftp is not None
+        try:
+            return operation(self.sftp)
+        except (EOFError, SSHException):
+            if self.profile is None:
+                raise SSHConnectionError("Connection dropped and no profile is available to reconnect.") from None
+            if self.profile.auth_type == "key":
+                self.connect(self.profile, passphrase=self.password)
+            else:
+                self.connect(self.profile, password=self.password)
+            assert self.sftp is not None
+            try:
+                return operation(self.sftp)
+            except (EOFError, SSHException) as exc:
+                raise SSHConnectionError("Connection dropped while talking to the remote server.") from exc
