@@ -95,7 +95,7 @@ pipx install git+https://github.com/patchharris/ftransfer.git
 Fallback with `pip`:
 
 ```bash
-pip install "ftransfer @ git+https://github.com/patchharris/ftransfer.git"
+pip install "scp-browser-tui @ git+https://github.com/patchharris/ftransfer.git"
 ```
 
 ## Run

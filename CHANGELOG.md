@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Local and remote pane filtering
 - Queued transfer progress with overall progress updates
 - Live local and remote preview panel for highlighted items
+- GitHub Actions workflow for PyPI Trusted Publishing
 
 ### Changed
 
@@ -24,6 +25,7 @@ All notable changes to this project will be documented in this file.
 - The preview panel starts closed by default and can be toggled on demand
 - The preview panel content is scrollable
 - Pane navigation now follows the currently focused pane more reliably
+- The PyPI distribution name is now `scp-browser-tui` while the CLI command remains `ftransfer`
 
 ## [0.1.0] - 2026-03-28
 
