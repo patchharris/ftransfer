@@ -167,3 +167,7 @@ See [examples/profiles.example.json](/C:/Users/patch/Coding/ftransfer/examples/p
 - Better recursive directory progress aggregation
 - Local destination picker with bookmarks/history
 - Host key verification management UI
+
+## License
+
+MIT. See [LICENSE](/C:/Users/patch/Coding/ftransfer/LICENSE).
