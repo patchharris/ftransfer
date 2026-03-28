@@ -364,18 +364,20 @@ class ConnectionScreen(Screen[None]):
         self.clear_form()
         self.query_one("#profile-name", Input).focus()
 
-    def action_save_profile(self) -> None:
+    async def action_save_profile(self) -> None:
         try:
             profile, password = self.build_profile_from_form()
         except ValueError as exc:
             self.set_status(str(exc))
             return
 
-        result = self.profile_manager.upsert_profile(
-            profile=profile,
-            password=password,
-            passphrase=password if profile.auth_type == "key" else "",
-            original_name=self.editing_original_name,
+        self.set_status(f"Saving profile '{profile.name}'...")
+        result = await asyncio.to_thread(
+            self.profile_manager.upsert_profile,
+            profile,
+            password,
+            password if profile.auth_type == "key" else "",
+            self.editing_original_name,
         )
         self.state.selected_profile = result.profile.name
         self.editing_original_name = result.profile.name
@@ -388,12 +390,13 @@ class ConnectionScreen(Screen[None]):
                 f"Saved profile '{result.profile.name}', but the secret was not stored in keyring: {details}"
             )
 
-    def action_delete_profile(self) -> None:
+    async def action_delete_profile(self) -> None:
         name = self.query_one("#profile-name", Input).value.strip()
         if not name:
             self.set_status("No profile selected.")
             return
-        self.profile_manager.delete_profile(name)
+        self.set_status(f"Deleting profile '{name}'...")
+        await asyncio.to_thread(self.profile_manager.delete_profile, name)
         self.state.selected_profile = None
         self.refresh_profiles()
         self.set_status(f"Deleted profile '{name}'.")
