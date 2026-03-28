@@ -1,5 +1,12 @@
 # SCP Browser TUI
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-green)](#features)
+[![UI](https://img.shields.io/badge/TUI-Textual-5c4ee5)](https://textual.textualize.io/)
+[![SSH](https://img.shields.io/badge/SSH-Paramiko-2ea44f)](https://www.paramiko.org/)
+[![Install with pipx](https://img.shields.io/badge/install-pipx-f69220)](#one-command-install)
+
 `scp-browser-tui` is a keyboard-driven terminal file browser for downloading files from remote Linux systems over SSH/SFTP. It uses Textual for the interface, Paramiko for SSH/SFTP operations, and keyring for password storage when available.
 
 ## Features
@@ -17,6 +24,20 @@
 - Local and remote pane filtering
 - Hidden-file toggle and sort cycling
 - Per-profile last visited remote path and default local download directory
+
+## Screenshots
+
+### Connection Screen
+
+![Connection screen](assets/connect-screen.png)
+
+### Connection Screen Variant
+
+![Connection screen variant](assets/connect-screen-1.png)
+
+### File Browser
+
+![File browser](assets/file-browser.png)
 
 ## Project Layout
 
