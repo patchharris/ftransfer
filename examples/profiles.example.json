@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "prod-web-01",
+      "host": "192.168.1.20",
+      "port": 22,
+      "username": "deploy",
+      "download_dir": "/home/localuser/Downloads/remote",
+      "last_path": "/var/www",
+      "auth_type": "password"
+    }
+  ]
+}
